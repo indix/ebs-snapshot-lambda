@@ -83,28 +83,63 @@ var deleteSnapshot = function(snapshotId) {
   };
   return ec2.deleteSnapshot(params).promise();
 };
+var retryDeleteSnapshot = deleteSnapshot;
 
-var purgeSnapshots = function() {
+var getSnapshots = function(MaxResults, NextToken) {
   var today = utils.getDate(new Date());
-  var snapshotsParams = {
+
+  return ec2.describeSnapshots({
     DryRun: false,
     Filters: [
       {
         Name: "tag:PurgeDate",
         Values: [today]
-      },
-    ]
-  };
-  
-  var snapshotDeletePromises = ec2.describeSnapshots(snapshotsParams).promise()
+      }
+    ],
+    MaxResults,
+    NextToken,
+  }).promise();
+};
+
+var purgeSnapshots = function(MaxResults, NextToken) {
+  var nextToken;
+
+  var snapshotDeletePromises = getSnapshots(MaxResults, NextToken)
     .then(function(data) {
+
+      nextToken = data.NextToken;
+
       return data.Snapshots.map(function(snapshot) {
-        return deleteSnapshot(snapshot.SnapshotId);
+        return deleteSnapshot(snapshot.SnapshotId)
+          .then(checkSnapshotPurgeStatus, function() { return retryDeleteSnapshot(snapshot.SnapshotId); });
       });
     });
     
-  return Promise.all(snapshotDeletePromises);
+  return Promise.all(snapshotDeletePromises).then(function() {
+    return Promise.resolve(nextToken);
+  });
+};
+
+var checkSnapshotPurgeStatus = function(snapshot) {
+  if (snapshot.State == 'completed')
+    return Promise.resolve();
+
+  console.log('>>> ' + snapshot.SnapshotId + ' purge state is ' + snapshot.state + '. Retrying purge once more ...');
+  return retryDeleteSnapshot(snapshot.SnapshotId);
+};
+
+var promisesToPurgeSnapshotsInBatches = []
+var purgeSnapshotsInBatches = function(BATCH_SIZE, next) {
+  return purgeSnapshots(BATCH_SIZE)
+    .then(function(nextToken) {
+      if (nextToken)
+        return promisesToPurgeSnapshotsInBatches.push(purgeSnapshotsInBatches(BATCH_SIZE, next));
+
+      console.log('>>> Purge snapshot activity completed in '+ (promisesToPurgeSnapshotsInBatches.length + 1) +' batches.');
+      return Promise.all(promisesToPurgeSnapshotsInBatches);
+    });
 };
 
 exports.snapshotVolumes = snapshotVolumes;
 exports.purgeSnapshots = purgeSnapshots;
+exports.purgeSnapshotsInBatches = purgeSnapshotsInBatches;
