@@ -5,7 +5,7 @@ var ebs = require('./ebs');
 var handler = function* (event, context, callback) {
   try {
     
-    yield ebs.purgeSnapshots();
+    yield ebs.purgeSnapshotsInBatches(process.env.BATCH_SIZE || 10);
     
     callback(null, 'Finished');
   } catch(e) {
@@ -15,7 +15,7 @@ var handler = function* (event, context, callback) {
 
 exports.handler = Promise.coroutine(handler);
 
-// Uncomment below to test locally
+//Uncomment below to test locally
 exports.handler(null, null, function(e, s) {
   if(e) {
     console.log("[ERROR] " + e);
