@@ -1,9 +1,9 @@
 var utils = require('./utils');
 
-var Promise = require('bluebird');
 var AWS = require('aws-sdk');
 var ec2 = new AWS.EC2(utils.getRegionObject());
 var config = require('./config.json');
+var promisesToPurgeSnapshotsInBatches = []
 
 var getPurgeDate = function(tags) {
   var purgeDate = new Date();
@@ -76,66 +76,73 @@ var snapshotVolumes = function () {
     return Promise.all(snapshotPromises);
 };
 
-var deleteSnapshot = function(snapshotId) {
+var deleteSnapshot = function(SnapshotId) {
   var params = {
-    SnapshotId: snapshotId,
+    SnapshotId,
     DryRun: false
   };
-  return ec2.deleteSnapshot(params).promise();
-};
-var retryDeleteSnapshot = deleteSnapshot;
 
-var getSnapshots = function(MaxResults, NextToken) {
-  var today = utils.getDate(new Date());
-
-  return ec2.describeSnapshots({
-    DryRun: false,
-    Filters: [
-      {
-        Name: "tag:PurgeDate",
-        Values: [today]
+  console.log(">>> Deleting "+ SnapshotId + " ...");
+  return ec2.deleteSnapshot(params).promise()
+    .catch(err => {
+      if (err.statusCode == 400 && err.code == 'InvalidSnapshot.InUse') {
+        console.log(">>> Skiping ERROR on deleting "+ SnapshotId +" in use ...");
+        return Promise.resolve({});
       }
-    ],
-    MaxResults,
-    NextToken,
-  }).promise();
-};
-
-var purgeSnapshots = function(MaxResults, NextToken) {
-  var nextToken;
-
-  var snapshotDeletePromises = getSnapshots(MaxResults, NextToken)
-    .then(function(data) {
-
-      nextToken = data.NextToken;
-
-      return data.Snapshots.map(function(snapshot) {
-        return deleteSnapshot(snapshot.SnapshotId)
-          .then(checkSnapshotPurgeStatus, function() { return retryDeleteSnapshot(snapshot.SnapshotId); });
-      });
+      return Promise.reject();
     });
-    
-  return Promise.all(snapshotDeletePromises).then(function() {
-    return Promise.resolve(nextToken);
-  });
 };
 
 var checkSnapshotPurgeStatus = function(snapshot) {
-  if (snapshot.State == 'completed')
+
+  if (!snapshot.State || snapshot.State == 'completed')   // Empty-response OR snapshot-delete-status obj considered successful here.
     return Promise.resolve();
 
   console.log('>>> ' + snapshot.SnapshotId + ' purge state is ' + snapshot.state + '. Retrying purge once more ...');
   return retryDeleteSnapshot(snapshot.SnapshotId);
 };
 
-var promisesToPurgeSnapshotsInBatches = []
+var retryDeleteSnapshot = deleteSnapshot;
+
+var getSnapshots = function(MaxResults, NextToken) {
+  return ec2.describeSnapshots({
+    DryRun: false,
+    Filters: [
+      {
+        Name: "tag:PurgeDate",
+        Values: [process.argv[2] || utils.getDate(new Date())]
+      }
+    ],
+    // MaxResults,  //--
+    // NextToken,   //-- This pagination is not working
+  }).promise();
+};
+
+var purgeSnapshots = (MaxResults, NextToken) => getSnapshots(MaxResults, NextToken)
+  .then(data => Promise.all(
+
+      data.Snapshots.map(snapshot => deleteSnapshot(snapshot.SnapshotId)
+        .then(checkSnapshotPurgeStatus, err => retryDeleteSnapshot(snapshot.SnapshotId))
+      )
+
+    ).then(() => Promise.resolve(
+
+      (data.Snapshots && data.Snapshots.length)   // If there are more snapshots
+      ? data.NextToken                            // PASS NextToken
+      : null                                      // Else signal a NULL
+
+    ))
+
+  );
+
 var purgeSnapshotsInBatches = function(BATCH_SIZE, next) {
-  return purgeSnapshots(BATCH_SIZE)
+
+  return purgeSnapshots(BATCH_SIZE, next)
     .then(function(nextToken) {
       if (nextToken)
-        return promisesToPurgeSnapshotsInBatches.push(purgeSnapshotsInBatches(BATCH_SIZE, next));
+        return promisesToPurgeSnapshotsInBatches.push(purgeSnapshotsInBatches(BATCH_SIZE, nextToken));
 
-      console.log('>>> Purge snapshot activity completed in '+ (promisesToPurgeSnapshotsInBatches.length + 1) +' batches.');
+      console.log('>>> Purge snapshot activity for '+ (process.argv[2] || utils.getDate(new Date())) +' completed in '+ (promisesToPurgeSnapshotsInBatches.length + 1) +' batches.');
       return Promise.all(promisesToPurgeSnapshotsInBatches);
     });
 };
