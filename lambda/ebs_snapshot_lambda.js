@@ -1,19 +1,15 @@
-var Promise = require('bluebird');
 
 var ebs = require('./ebs');
 
-var handler = function* (event, context, callback) {
-  try {
-    
-    yield ebs.purgeSnapshots();
-    
-    callback(null, 'Finished');
-  } catch(e) {
-    callback(e);
-  }
-};
 
-exports.handler = Promise.coroutine(handler);
+var handler = (event, context, callback) =>
+    
+  ebs.snapshotVolumes(process.env.BATCH_SIZE || 100)
+  .then(()=> callback(null, 'Finished'))
+  .catch(callback);
+
+
+exports.handler = handler;
 
 // Uncomment below to test locally
 exports.handler(null, null, function(e, s) {
