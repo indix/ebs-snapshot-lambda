@@ -4,7 +4,7 @@ var ebs = require('./ebs');
 
 var handler = (event, context, callback) =>
     
-  ebs.snapshotVolumes(process.env.BATCH_SIZE || 100)
+  ebs.snapshotVolumes()
   .then(()=> callback(null, 'Finished'))
   .catch(callback);
 

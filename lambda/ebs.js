@@ -62,18 +62,15 @@ var snapshotVolumes = function () {
     ]
   };
   
-  var snapshotPromises = ec2.describeVolumes(getVolumesParam)
+  return ec2.describeVolumes(getVolumesParam)
     .promise()
-    .then(function(data) {
-      return data.Volumes.map(function(volume) {
-        return createSnapshot(volume.VolumeId)
-          .then(function(data) {
-            return tagSnapshot(volume, data.SnapshotId);
-          })
-      });
-    });
-    
-    return Promise.all(snapshotPromises);
+    .then(data => Promise.all(
+      data.Volumes.map(volume =>
+        createSnapshot(volume.VolumeId)
+          .then(data => tagSnapshot(volume, data.SnapshotId))
+      )
+    ));
+
 };
 
 var deleteSnapshot = function(SnapshotId) {
@@ -86,7 +83,7 @@ var deleteSnapshot = function(SnapshotId) {
   return ec2.deleteSnapshot(params).promise()
     .catch(err => {
       if (err.statusCode == 400 && err.code == 'InvalidSnapshot.InUse') {
-        console.log(">>> Skiping ERROR on deleting "+ SnapshotId +" in use ...");
+        console.log(">>> Skipping ERROR on deleting "+ SnapshotId +" in use ...");
         return Promise.resolve({});
       }
       return Promise.reject();
