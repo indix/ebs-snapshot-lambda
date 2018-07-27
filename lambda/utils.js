@@ -31,6 +31,6 @@ var getDate = function(date) {
 exports.getRegion = getRegion;
 exports.getRegionObject = getRegionObject;
 exports.getApiVersion = getApiVersion;
-exports.getRegionObject = getRegionObject;
+exports.getApiVersionObject = getApiVersionObject;
 exports.getTags = getTags;
 exports.getDate = getDate;
