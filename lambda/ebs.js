@@ -1,7 +1,9 @@
 var utils = require('./utils');
 
 var AWS = require('aws-sdk');
-var ec2 = new AWS.EC2(utils.getRegionObject());
+AWS.config.update(utils.getRegionObject());
+var ec2 = new AWS.EC2(utils.getApiVersionObject());
+var ses = new AWS.SES(utils.getApiVersionObject());
 var config = require('./config.json');
 var promisesToPurgeSnapshotsInBatches = []
 
@@ -69,7 +71,8 @@ var snapshotVolumes = function () {
         createSnapshot(volume.VolumeId)
           .then(data => tagSnapshot(volume, data.SnapshotId))
       )
-    ));
+    ))
+    .catch(notifyFailure);
 
 };
 
@@ -130,7 +133,7 @@ var purgeSnapshots = (MaxResults, NextToken) => getSnapshots(MaxResults, NextTok
 
     ))
 
-  );
+  ).catch(notifyFailure);
 
 var purgeSnapshotsInBatches = function(BATCH_SIZE, next) {
 
@@ -144,6 +147,38 @@ var purgeSnapshotsInBatches = function(BATCH_SIZE, next) {
     });
 };
 
+var notifyFailure = function(error) {
+
+  if (!(process.env.TO_EMAIL_ADDRESS && process.env.SENDER_EMAIL_ADDRESS))
+    return Promise.reject(error);
+
+  return ses.sendEmail({
+    Destination: {
+      CcAddresses: [
+        process.env.CC_EMAIL_ADDRESS || process.env.TO_EMAIL_ADDRESS,
+      ],
+      ToAddresses: [
+        process.env.TO_EMAIL_ADDRESS,
+      ]
+    },
+    Message: {
+      Body: {
+        Text: {
+         Charset: "UTF-8",
+         Data: error.message || error
+        }
+       },
+       Subject: {
+        Charset: 'UTF-8',
+        Data: 'EBS Snapshot Lambda Failed'
+       }
+      },
+    Source: process.env.SENDER_EMAIL_ADDRESS,
+  }).promise();
+
+}
+
 exports.snapshotVolumes = snapshotVolumes;
 exports.purgeSnapshots = purgeSnapshots;
 exports.purgeSnapshotsInBatches = purgeSnapshotsInBatches;
+exports.notifyFailure = notifyFailure;
